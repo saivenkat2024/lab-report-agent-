@@ -1,67 +1,62 @@
-import re
-import sys
-import json
-import pdfplumber
+import os
+import time
+from extractor import extract_biomarkers
+from comparator import load_benchmarks, compare, group_by_category
+from rag import generate_summary
 
-
-def extract_text(filepath):
-    text = ""
-    with pdfplumber.open(filepath) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-    return text
-
-
-def extract_biomarkers(pdf_path, json_path):
-    with open(json_path) as f:
-        biomarker_defs = json.load(f)
-
-    lookup = {}
-    for b in biomarker_defs:
-        canonical = b["biomarker"]
-        lookup[canonical.lower()] = canonical
-        for alias in b.get("aliases", []):
-            lookup[alias.lower()] = canonical
-
-    text = extract_text(pdf_path)
-    results = {}
-
-    for line in text.splitlines():
-        line_stripped = line.strip()
-        if not line_stripped:
-            continue
-
-        matched_canonical = None
-        for alias, canonical in lookup.items():
-            if alias in line_stripped.lower():
-                matched_canonical = canonical
-                break
-
-        if not matched_canonical:
-            continue
-
-        if ":" in line_stripped:
-            after_colon = line_stripped.split(":", 1)[1]
-            numbers = re.findall(r'\b\d+\.?\d*\b', after_colon)
-        else:
-            numbers = re.findall(r'\b\d+\.?\d*\b', line_stripped)
-
-        if not numbers:
-            continue
-
-        value = float(numbers[0])
-        if value > 100000:
-            continue
-
-        results[matched_canonical] = value
-
-    return results
-
-
-# ── SET YOUR PATHS HERE ──────────────────────────────────────────
-PDF_PATH  = "/Users/shashankvinnakota/Documents/lab report agent/261290000978_Report (1).pdf"
-JSON_PATH = "/Users/shashankvinnakota/Documents/lab report agent/medical_benchmark.json"
+# ── CONFIG ──────────────────────────────────────────────────────
+PDF_PATH       = "/Users/shashankvinnakota/Documents/lab report agent/261290000978_Report (1).pdf"
+BENCHMARK_PATH = "/Users/shashankvinnakota/Documents/lab report agent/medical_benchmark.json"
+PATIENT_NAME   = "Shashank"
+GENDER         = "male"   # "male" or "female"
 # ────────────────────────────────────────────────────────────────
 
-result = extract_biomarkers(PDF_PATH, JSON_PATH)
-print(result)
+
+def print_results(compared: dict):
+    STATUS_ICON = {"normal": "🟢", "low": "🟡", "high": "🔴", "unknown": "⚪"}
+    grouped = group_by_category(compared)
+
+    print("\n" + "="*60)
+    print("        LAB REPORT — EXTRACTED VALUES")
+    print("="*60)
+
+    for category, markers in grouped.items():
+        print(f"\n📋 {category}")
+        print("-" * 40)
+        for name, data in markers.items():
+            icon = STATUS_ICON.get(data["status"], "⚪")
+            range_str = f"  (ref: {data['range']} {data['unit']})" if data["range"] != "N/A" else ""
+            print(f"  {icon}  {name}: {data['value']} {data['unit']}{range_str}")
+
+
+def main():
+    print("🔍 Extracting biomarkers from PDF...")
+    extracted = extract_biomarkers(PDF_PATH, BENCHMARK_PATH)
+
+    if not extracted:
+        print("❌ No biomarkers found. Check your PDF path or benchmark JSON.")
+        return
+
+    print(f"✅ Found {len(extracted)} biomarkers: {list(extracted.keys())}")
+
+    print("\n📊 Comparing against benchmarks...")
+    benchmarks = load_benchmarks(BENCHMARK_PATH)
+    compared = compare(extracted, benchmarks, gender=GENDER)
+
+    print_results(compared)
+
+    # ── GENERATION & SLEEP ARE NOW SAFELY INSIDE main() ──
+    print("\n\n🤖 Generating patient-friendly summary...\n")
+    time.sleep(3) # A quick 3-second buffer to keep the API happy
+    
+    summary = generate_summary(compared, benchmarks, patient_name=PATIENT_NAME, gender=GENDER)
+
+    print("="*60)
+    print("        PATIENT SUMMARY")
+    print("="*60)
+    print(summary)
+
+
+# ── THIS STAYS EXTREMELY SIMPLE ──
+if __name__ == "__main__":
+    main()
